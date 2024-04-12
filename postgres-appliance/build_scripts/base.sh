@@ -59,6 +59,7 @@ curl -sL "https://github.com/hughcapet/pg_tm_aux/archive/$PG_TM_AUX_COMMIT.tar.g
 curl -sL "https://github.com/zubkov-andrei/pg_profile/archive/$PG_PROFILE.tar.gz" | tar xz
 git clone -b "$SET_USER" https://github.com/pgaudit/set_user.git
 git clone https://github.com/timescale/timescaledb.git
+git clone https://github.com/pgvector/pgvector.git
 
 apt-get install -y \
     postgresql-common \
@@ -111,10 +112,6 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
             EXTRAS+=("postgresql-${version}-decoderbufs")
         fi
 
-        if [ "${version%.*}" -ge 11 ]; then
-            EXTRAS+=("postgresql-${version}-pgvector")
-        fi
-
         if [ "${version%.*}" -lt 11 ]; then
             EXTRAS+=("postgresql-${version}-amcheck")
         fi
@@ -134,6 +131,17 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
     # Install 3rd party stuff
 
     # use subshell to avoid having to cd back (SC2103)
+    (
+        cd pgvector
+        for v in $PGVECTOR; do
+            git checkout "v$v"
+            make
+            make install
+            git reset --hard
+            git clean -f -d
+       done
+    )
+
     (
         cd timescaledb
         for v in $TIMESCALEDB; do
