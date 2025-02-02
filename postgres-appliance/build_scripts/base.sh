@@ -56,6 +56,8 @@ curl -sL "https://github.com/zalando-pg/pg_auth_mon/archive/$PG_AUTH_MON_COMMIT.
 curl -sL "https://github.com/cybertec-postgresql/pg_permissions/archive/$PG_PERMISSIONS_COMMIT.tar.gz" | tar xz
 curl -sL "https://github.com/zubkov-andrei/pg_profile/archive/$PG_PROFILE.tar.gz" | tar xz
 git clone -b "$SET_USER" https://github.com/pgaudit/set_user.git
+git clone https://github.com/timescale/timescaledb.git
+git clone https://github.com/pgvector/pgvector.git
 
 apt-get install -y \
     postgresql-common \
@@ -95,8 +97,7 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
                 "postgresql-${version}-repack"
                 "postgresql-${version}-wal2json"
                 "postgresql-${version}-decoderbufs"
-                "postgresql-${version}-pllua"
-                "postgresql-${version}-pgvector")
+                "postgresql-${version}-pllua")
 
         if [ "$WITH_PERL" = "true" ]; then
             EXTRAS+=("postgresql-plperl-${version}")
@@ -135,6 +136,34 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
     fi
 
     # Install 3rd party stuff
+
+    # use subshell to avoid having to cd back (SC2103)
+    (
+        cd pgvector
+        for v in $PGVECTOR; do
+            git checkout "v$v"
+            make
+            make install
+            git reset --hard
+            git clean -f -d
+       done
+    )
+
+    (
+        cd timescaledb
+        for v in $TIMESCALEDB; do
+            git checkout "$v"
+            sed -i "s/VERSION 3.11/VERSION 3.10/" CMakeLists.txt
+            if BUILD_FORCE_REMOVE=true ./bootstrap -DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF \
+                    -DTAP_CHECKS=OFF -DPG_CONFIG="/usr/lib/postgresql/$version/bin/pg_config" \
+                    -DAPACHE_ONLY="$TIMESCALEDB_APACHE_ONLY" -DSEND_TELEMETRY_DEFAULT=NO; then
+                make -C build install
+                strip /usr/lib/postgresql/"$version"/lib/timescaledb*.so
+            fi
+            git reset --hard
+            git clean -f -d
+        done
+    )
 
     if [ "${TIMESCALEDB_APACHE_ONLY}" != "true" ] && [ "${TIMESCALEDB_TOOLKIT}" = "true" ]; then
         apt-get update
