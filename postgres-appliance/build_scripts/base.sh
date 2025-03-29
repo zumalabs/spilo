@@ -139,6 +139,7 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
 
     # use subshell to avoid having to cd back (SC2103)
     (
+        export MAKEFLAGS='--jobserver-style=pipe -j$(nproc)'
         cd pgvector
         for v in $PGVECTOR; do
             git checkout "v$v"
@@ -150,10 +151,10 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
     )
 
     (
+        export MAKEFLAGS='--jobserver-style=pipe -j$(nproc)'
         cd timescaledb
         for v in $TIMESCALEDB; do
             git checkout "$v"
-            sed -i "s/VERSION 3.11/VERSION 3.10/" CMakeLists.txt
             if BUILD_FORCE_REMOVE=true ./bootstrap -DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF \
                     -DTAP_CHECKS=OFF -DPG_CONFIG="/usr/lib/postgresql/$version/bin/pg_config" \
                     -DAPACHE_ONLY="$TIMESCALEDB_APACHE_ONLY" -DSEND_TELEMETRY_DEFAULT=NO; then
