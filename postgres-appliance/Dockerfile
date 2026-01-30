@@ -56,13 +56,13 @@ ARG WITH_PERL=false
 ARG DEB_PG_SUPPORTED_VERSIONS="$PGOLDVERSIONS $PGVERSION"
 
 # Install PostgreSQL, extensions and contribs
-ENV POSTGIS_VERSION=3.5 \
+ENV POSTGIS_VERSION=3.6 \
     BG_MON_COMMIT=7f5887218790b263fe3f42f85f4ddc9c8400b154 \
     PG_AUTH_MON_COMMIT=fe099eef7662cbc85b0b79191f47f52f1e96b779 \
     PG_MON_COMMIT=ead1de70794ed62ca1e34d4022f6165ff36e9a91 \
     SET_USER=REL4_1_0 \
     PLPROFILER=REL4_2_5 \
-    PG_PROFILE=4.7 \
+    PG_PROFILE=4.10 \
     PAM_OAUTH2=v1.0.1 \
     PG_PERMISSIONS_COMMIT=f4b7c18676fa64236a1c8e28d34a35764e4a70e2
 
@@ -72,15 +72,14 @@ RUN bash base.sh
 # Install wal-g
 COPY --from=dependencies-builder /builddeps/wal-g /usr/local/bin/
 
-COPY build_scripts/patroni_wale.sh build_scripts/compress_build.sh /builddeps/
+COPY build_scripts/patroni.sh build_scripts/compress_build.sh /builddeps/
 
-# Install patroni and wal-e
-ENV PATRONIVERSION=4.0.4
-ENV WALE_VERSION=1.1.1
+# Install patroni
+ENV PATRONIVERSION=4.0.6
 
 WORKDIR /
 
-RUN bash /builddeps/patroni_wale.sh
+RUN bash /builddeps/patroni.sh
 
 RUN if [ "$COMPRESS" = "true" ]; then bash /builddeps/compress_build.sh; fi
 
@@ -109,7 +108,7 @@ ENV LC_ALL=en_US.utf-8 \
     PGVECTOR=$PGVECTOR \
     DEMO=$DEMO
 
-ENV WALE_ENV_DIR=$RW_DIR/etc/wal-e.d/env \
+ENV WALG_ENV_DIR=$RW_DIR/etc/wal-e.d/env \
     LOG_ENV_DIR=$RW_DIR/etc/log.d/env \
     PGROOT=$PGHOME/pgdata/pgroot
 
