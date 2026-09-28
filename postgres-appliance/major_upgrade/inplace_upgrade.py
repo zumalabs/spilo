@@ -451,7 +451,7 @@ hosts deny = *
                         except Exception:
                             logger.error("Failed to execute '%s'", query)
 
-    def reanalyze(self):
+    def custom_stats_target_reanalyze(self):
         from patroni.postgresql.connection import get_connection_cursor
 
         if not self._statistics:
@@ -470,12 +470,15 @@ hosts deny = *
                     except Exception:
                         logger.error("Failed to execute '%s'", query)
 
+    def full_reanalyze(self):
+        self.postgresql.analyze(self.desired_version)
+
     def analyze(self):
         try:
             self.reset_custom_statistics_target()
         except Exception as e:
             logger.error('Failed to reset custom statistics targets: %r', e)
-        self.postgresql.analyze(True)
+        self.postgresql.analyze(self.desired_version, in_stages=True)
         try:
             self.restore_custom_statistics_target()
         except Exception as e:
@@ -634,7 +637,10 @@ hosts deny = *
 
         analyze_thread.join()
 
-        self.reanalyze()
+        if int(self.desired_version) < 18:
+            self.custom_stats_target_reanalyze()
+        else:
+            self.full_reanalyze()
 
         logger.info('Total upgrade time (with analyze): %s', time.time() - downtime_start)
         self.postgresql.bootstrap.call_post_bootstrap(self.config['bootstrap'])
@@ -711,6 +717,7 @@ def rsync_replica(config, desired_version, primary_ip, pid):
 
     env = os.environ.copy()
     env['RSYNC_PASSWORD'] = postgresql.config.replication['password']
+    primary_ip = f'[{primary_ip}]' if ':' in primary_ip else primary_ip
     if subprocess.call(['rsync', '--archive', '--delete', '--hard-links', '--size-only', '--omit-dir-times',
                         '--no-inc-recursive', '--include=/data/***', '--include=/data_old/***',
                         '--exclude=/data/pg_xlog/*', '--exclude=/data_old/pg_xlog/*',

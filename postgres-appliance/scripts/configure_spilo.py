@@ -322,6 +322,7 @@ postgresql:
     extwlist.extensions: 'btree_gin,btree_gist,citext,extra_window_functions,first_last_agg,hll,\
 hstore,hypopg,intarray,ltree,pgcrypto,pgq,pgq_node,pg_trgm,postgres_fdw,roaringbitmap,tablefunc,uuid-ossp,vector'
     extwlist.custom_path: /scripts
+    output_plugin_libraries: 'pgoutput, test_decoding, pglogical_output, wal2json, decoderbufs'
   pg_hba:
     - local   all             all                                   trust
     {{#PAM_OAUTH2}}
@@ -411,18 +412,23 @@ def get_provider():
         logging.info("Figuring out my environment (Google? AWS? Openstack? Local?)")
         response = requests.put(
             url='http://169.254.169.254/latest/api/token',
-            headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'}
+            headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'},
+            timeout=2
         )
+        if not response.ok:
+            logging.info("Failed to get IMDS token (status %s), assuming local Docker setup", response.status_code)
+            return PROVIDER_LOCAL
         token = response.text
         r = requests.get(
             url='http://169.254.169.254',
-            headers={'X-aws-ec2-metadata-token': token}
+            headers={'X-aws-ec2-metadata-token': token},
+            timeout=2
         )
         if r.headers.get('Metadata-Flavor', '') == 'Google':
             return PROVIDER_GOOGLE
         else:
             # accessible on Openstack, will fail on AWS
-            r = requests.get('http://169.254.169.254/openstack/latest/meta_data.json')
+            r = requests.get('http://169.254.169.254/openstack/latest/meta_data.json', timeout=2)
             if r.ok:
                 # make sure the response is parsable - https://github.com/Azure/aad-pod-identity/issues/943 and
                 # https://github.com/zalando/spilo/issues/542
@@ -432,7 +438,8 @@ def get_provider():
             # is accessible from both AWS and Openstack, Possiblity of misidentification if previous try fails
             r = requests.get(
                 url='http://169.254.169.254/latest/meta-data/ami-id',
-                headers={'X-aws-ec2-metadata-token': token}
+                headers={'X-aws-ec2-metadata-token': token},
+                timeout=2
             )
             return PROVIDER_AWS if r.ok else PROVIDER_UNSUPPORTED
     except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
@@ -889,9 +896,12 @@ def write_walg_environment(placeholders, prefix, overwrite):
             if aws_region:
                 walg['AWS_REGION'] = aws_region
         elif not aws_region:
-            # try to determine region from the endpoint or bucket name
-            name = walg.get('WAL_S3_BUCKET') or walg.get('WALG_S3_PREFIX')
-            match = re.search(r'.*(\w{2}-\w+-\d)-.*', name)
+            # try to determine region from the bucket name
+            bucket_or_prefix = walg.get('WAL_S3_BUCKET') or walg.get('WALG_S3_PREFIX') or ''
+            # extract bucket name only to avoid false matches on path segments (e.g. /wal/ suffix)
+            bucket_match = re.match(r'^(?:s3://)?([^/]+)', bucket_or_prefix)
+            name = bucket_match.group(1) if bucket_match else bucket_or_prefix
+            match = re.search(r'(\w{2}-\w+-\d)-', name)
             if match:
                 aws_region = match.group(1)
             else:
@@ -909,6 +919,12 @@ def write_walg_environment(placeholders, prefix, overwrite):
         # write IMDS env vars for any prefix if defined
         for name in aws_imds_names:
             if placeholders.get(name):
+                walg[name] = placeholders.get(name)
+
+        # fall back to bare IRSA vars if prefixed versions are not set
+        irsa_names = ['AWS_ROLE_ARN', 'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_STS_REGIONAL_ENDPOINTS', 'AWS_REGION']
+        for name in irsa_names:
+            if not walg.get(name) and placeholders.get(name):
                 walg[name] = placeholders.get(name)
 
         write_envdir_names = s3_names + walg_names + aws_imds_names
@@ -953,9 +969,6 @@ def write_walg_environment(placeholders, prefix, overwrite):
         bucket_path = '/spilo/{WAL_BUCKET_SCOPE_PREFIX}{SCOPE}{WAL_BUCKET_SCOPE_SUFFIX}/wal/{PGVERSION}'.format(**walg)
         prefix_template = '{0}://{{WAL_{1}_BUCKET}}{2}'.format(store_type.lower(), store_type, bucket_path)
         walg[prefix_env_name] = prefix_template.format(**walg)
-    # Set WALG_*_PREFIX for future compatibility
-    if store_type in ('S3', 'GS') and not walg.get(write_envdir_names[1]):
-        walg[write_envdir_names[1]] = walg[prefix_env_name]
 
     if not os.path.exists(walg['WALG_ENV_DIR']):
         os.makedirs(walg['WALG_ENV_DIR'])
@@ -981,7 +994,12 @@ def update_and_write_walg_configuration(placeholders, prefix, overwrite):
 def write_clone_pgpass(placeholders, overwrite):
     pgpassfile = placeholders['CLONE_PGPASS']
     # pgpass is host:port:database:user:password
-    r = {'host': escape_pgpass_value(placeholders['CLONE_HOST']),
+    clone_host = escape_pgpass_value(placeholders['CLONE_HOST'])
+    # IPv6 addresses contain colons which conflict with the pgpass delimiter;
+    # wrap them in brackets so libpq can parse the host field correctly.
+    if ':' in str(clone_host):
+        clone_host = f'[{clone_host}]'
+    r = {'host': clone_host,
          'port': placeholders['CLONE_PORT'],
          'database': '*',
          'user': escape_pgpass_value(placeholders['CLONE_USER']),
