@@ -177,10 +177,19 @@ for version in $DEB_PG_SUPPORTED_VERSIONS; do
         cd pgvector
         for v in $PGVECTOR; do
             git checkout "v$v"
-            make
+            # -x is critical: *.o is gitignored, so plain `git clean -f -d` leaves
+            # stale objects from the previous PG major's pass, and make relinks
+            # them into the new version's .so (mismatched T_IndexAmRoutine tag).
+            git clean -f -d -x
+            # OPTFLAGS="" disables pgvector's default -march=native: the build box
+            # (sauron, Zen 3) bakes AVX-512 into non-dispatched code paths, and any
+            # CPU without AVX-512 (CI runners, prod nodes) SIGILLs the backend on
+            # CREATE EXTENSION vector. pgvector docs: 'To compile for portability,
+            # run: make OPTFLAGS=""'. Runtime-dispatched SIMD is unaffected.
+            make PG_CONFIG="/usr/lib/postgresql/$version/bin/pg_config" OPTFLAGS=""
             make install
             git reset --hard
-            git clean -f -d
+            git clean -f -d -x
        done
     )
 
